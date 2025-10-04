@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Teachable Machine Image Model</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            text-align: center;
+        }
+        #webcam-container {
+            margin: 20px 0;
+        }
+        canvas {
+            border: 2px solid #4CAF50;
+            border-radius: 10px;
+        }
+        #label-container {
+            margin: 20px 0;
+        }
+        #label-container div {
+            margin: 5px 0;
+            padding: 5px;
+            background-color: #f0f0f0;
+            border-radius: 5px;
+        }
+        #final-detection {
+            margin: 20px 0;
+            padding: 15px;
+            background-color: #e8f5e8;
+            border: 2px solid #4CAF50;
+            border-radius: 10px;
+            font-size: 18px;
+            font-weight: bold;
+        }
+        #final-detection.high-confidence {
+            background-color: #d4edda;
+            border-color: #28a745;
+            color: #155724;
+        }
+        #final-detection.medium-confidence {
+            background-color: #fff3cd;
+            border-color: #ffc107;
+            color: #856404;
+        }
+        #final-detection.low-confidence {
+            background-color: #f8d7da;
+            border-color: #dc3545;
+            color: #721c24;
+        }
+        #status {
+            margin: 10px 0;
+            font-weight: bold;
+        }
+        .error {
+            color: red;
+        }
+        .success {
+            color: green;
+        }
+    </style>
+</head>
+<body>
+    <h1>Teachable Machine Image Model - Material Detection</h1>
+    <div id="status">Click Start to begin</div>
+    <button type="button" onclick="init()" id="startBtn">Start</button>
+    <div id="webcam-container"></div>
+    <div id="final-detection" style="display: none;"></div>
+    <div id="label-container"></div>
+</body>
+</html>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
+<script type="text/javascript">
+    // More API functions here:
+    // https://github.com/googlecreativelab/teachablemachine-community/tree/master/libraries/image
+
+    // the link to your model provided by Teachable Machine export panel
+    const URL = "./";
+
+    let model, webcam, labelContainer, maxPredictions, finalDetectionElement;
+    let predictionHistory = [];
+    const HISTORY_SIZE = 10;
+
+    // Load the image model and setup the webcam
+    async function init() {
+        try {
+            // Update status
+            updateStatus("Loading model...", "success");
+            document.getElementById("startBtn").disabled = true;
+            
+            const modelURL = URL + "model.json";
+            const metadataURL = URL + "metadata.json";
+
+            // load the model and metadata
+            console.log("Loading model from:", modelURL);
+            console.log("Loading metadata from:", metadataURL);
+            
+            model = await tmImage.load(modelURL, metadataURL);
+            maxPredictions = model.getTotalClasses();
+            
+            updateStatus("Model loaded! Setting up webcam...", "success");
+            console.log("Model loaded with", maxPredictions, "classes");
+
+            // Convenience function to setup a webcam
+            const flip = true; // whether to flip the webcam
+            webcam = new tmImage.Webcam(200, 200, flip); // width, height, flip
+            
+            updateStatus("Requesting camera access...", "success");
+            await webcam.setup(); // request access to the webcam
+            await webcam.play();
+            
+            updateStatus("Camera ready! Starting material detection...", "success");
+            
+            window.requestAnimationFrame(loop);
+
+            // append elements to the DOM
+            document.getElementById("webcam-container").appendChild(webcam.canvas);
+            labelContainer = document.getElementById("label-container");
+            finalDetectionElement = document.getElementById("final-detection");
+            
+            for (let i = 0; i < maxPredictions; i++) { // and class labels
+                labelContainer.appendChild(document.createElement("div"));
+            }
+            
+            // Show final detection element
+            finalDetectionElement.style.display = "block";
+            finalDetectionElement.innerHTML = "Analyzing... Please hold material steady";
+            
+            // Hide the start button
+            document.getElementById("startBtn").style.display = "none";
+            labelContainer = document.getElementById("label-container");
+            finalDetectionElement = document.getElementById("final-detection");
+            
+            for (let i = 0; i < maxPredictions; i++) { // and class labels
+                labelContainer.appendChild(document.createElement("div"));
+            }
+            
+            // Show final detection element
+            finalDetectionElement.style.display = "block";
+            finalDetectionElement.innerHTML = "Analyzing... Please hold material steady";
+            
+            // Hide the start button
+            document.getElementById("startBtn").style.display = "none";
+            
+        } catch (error) {
+            console.error("Error during initialization:", error);
+            updateStatus("Error: " + error.message, "error");
+            document.getElementById("startBtn").disabled = false;
+        }
+    }
+    
+    function updateStatus(message, type = "") {
+        const statusElement = document.getElementById("status");
+        statusElement.textContent = message;
+        statusElement.className = type;
+    }
+
+    async function loop() {
+        webcam.update(); // update the webcam frame
+        await predict();
+        window.requestAnimationFrame(loop);
+    }
+    
+
+
+    // run the webcam image through the image model
+    async function predict() {
+        try {
+            // predict can take in an image, video or canvas html element
+            const prediction = await model.predict(webcam.canvas);
+            
+            // Display all predictions with percentages
+            for (let i = 0; i < maxPredictions; i++) {
+                const probability = (prediction[i].probability * 100).toFixed(1);
+                const classPrediction = prediction[i].className + ": " + probability + "%";
+                labelContainer.childNodes[i].innerHTML = classPrediction;
+            }
+            
+            // Add to prediction history for final detection
+            predictionHistory.push(prediction);
+            if (predictionHistory.length > HISTORY_SIZE) {
+                predictionHistory.shift(); // Remove oldest prediction
+            }
+            
+            // Calculate final detection based on averaged predictions
+            if (predictionHistory.length >= 5) { // Start showing final detection after 5 predictions
+                calculateFinalDetection();
+            }
+            
+        } catch (error) {
+            console.error("Prediction error:", error);
+        }
+    }
+    
+    function calculateFinalDetection() {
+        // Average the predictions over the history
+        const averagedPrediction = {};
+        
+        // Initialize averages
+        for (let i = 0; i < maxPredictions; i++) {
+            const className = predictionHistory[0][i].className;
+            averagedPrediction[className] = 0;
+        }
+        
+        // Sum up probabilities
+        for (const prediction of predictionHistory) {
+            for (let i = 0; i < maxPredictions; i++) {
+                const className = prediction[i].className;
+                averagedPrediction[className] += prediction[i].probability;
+            }
+        }
+        
+        // Calculate averages and find the highest
+        let highestProbability = 0;
+        let detectedMaterial = "";
+        
+        for (const [className, totalProbability] of Object.entries(averagedPrediction)) {
+            const avgProbability = totalProbability / predictionHistory.length;
+            if (avgProbability > highestProbability) {
+                highestProbability = avgProbability;
+                detectedMaterial = className;
+            }
+        }
+        
+        // Display final detection with confidence level
+        const confidencePercentage = (highestProbability * 100).toFixed(1);
+        let confidenceLevel = "";
+        let confidenceClass = "";
+        
+        if (highestProbability >= 0.8) {
+            confidenceLevel = "High Confidence";
+            confidenceClass = "high-confidence";
+        } else if (highestProbability >= 0.6) {
+            confidenceLevel = "Medium Confidence";
+            confidenceClass = "medium-confidence";
+        } else {
+            confidenceLevel = "Low Confidence";
+            confidenceClass = "low-confidence";
+        }
+        
+        finalDetectionElement.className = confidenceClass;
+        finalDetectionElement.innerHTML = `
+            <div>🔍 FINAL DETECTION:</div>
+            <div style="font-size: 24px; margin: 10px 0;">${detectedMaterial.toUpperCase()}</div>
+            <div>Accuracy: ${confidencePercentage}% (${confidenceLevel})</div>
+        `;
+    }
+</script>
